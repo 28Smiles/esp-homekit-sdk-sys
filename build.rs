@@ -49,24 +49,33 @@ fn main() -> Result<()> {
     let pio_scons_vars = project::SconsVariables::from_dump(&project_path)?;
 
     build::LinkArgsBuilder::try_from(&pio_scons_vars)?
-        .build()
+        .build()?
         .propagate();
 
     build::CInclArgs::try_from(&pio_scons_vars)?.propagate();
 
-    let cfg_args = kconfig::CfgArgs::try_from(
-        pio_scons_vars
-            .project_dir
-            .join(if pio_scons_vars.release_build {
-                "sdkconfig.release"
-            } else {
-                "sdkconfig.debug"
+    let kconfig_str_allow = regex::Regex::new(r"IDF_TARGET")?;
+    let cfg_args = build::CfgArgs {
+        args: kconfig::try_from_config_file(
+            pio_scons_vars
+                .project_dir
+                .join(if pio_scons_vars.release_build {
+                    "sdkconfig.release"
+                } else {
+                    "sdkconfig.debug"
+                })
+                .as_path()
+        )?
+            .filter(|(key, value)| {
+                matches!(value, kconfig::Value::Tristate(kconfig::Tristate::True))
+                    || kconfig_str_allow.is_match(key)
             })
-            .as_path(),
-    )?;
+            .filter_map(|(key, value)| value.to_rustc_cfg("esp_idf", key))
+            .collect::<Vec<String>>()
+    };
 
-    cfg_args.propagate("ESP_IDF");
-    cfg_args.output("ESP_IDF");
+    cfg_args.propagate();
+    cfg_args.output();
 
     let header = PathBuf::from("src").join("include").join("bindings.h");
 
@@ -115,8 +124,10 @@ fn main() -> Result<()> {
             .builder()?
             .ctypes_prefix("c_types")
             .header(header.to_string_lossy())
-            .blacklist_function("strtold")
-            .blacklist_function("_strtold_r")
-            .clang_args(args),
-    )
+            .blocklist_function("strtold")
+            .blocklist_function("_strtold_r")
+            .clang_args(args)
+    )?;
+
+    Ok(())
 }
