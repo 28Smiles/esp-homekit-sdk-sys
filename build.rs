@@ -6,8 +6,7 @@ use std::path::Path;
 
 use anyhow::*;
 
-use embuild::bindgen;
-use embuild::build;
+use embuild::{bindgen, build};
 use embuild::cargo;
 use embuild::cargo::{IntoWarning, workspace_dir};
 use embuild::kconfig;
@@ -275,12 +274,6 @@ fn main() -> Result<()> {
         (pio_scons_vars, Some(link_args))
     };
 
-    if let Some(link_args) = link_args {
-        link_args.propagate();
-    }
-
-    build::CInclArgs::try_from(&pio_scons_vars)?.propagate();
-
     let kconfig_str_allow = regex::Regex::new(r"IDF_TARGET")?;
     let cfg_args = build::CfgArgs {
         args: kconfig::try_from_config_file(
@@ -300,9 +293,6 @@ fn main() -> Result<()> {
             .filter_map(|(key, value)| value.to_rustc_cfg("esp_idf", key))
             .collect::<Vec<String>>()
     };
-
-    cfg_args.propagate();
-    cfg_args.output();
 
     let header = PathBuf::from("src").join("include").join("bindings.h");
 
@@ -364,14 +354,31 @@ fn main() -> Result<()> {
             .clang_args(vec![
                 "-target",
                 if mcu == "esp32c3" {
-                    // Necessary to pass explicitly, because of https://github.com/rust-lang/rust-bindgen/issues/1555
                     "riscv32"
                 } else {
-                    // We don't really have a similar issue with Xtensa, but we pass it explicitly as well just in case
                     "xtensa"
                 },
             ]),
     )?;
+
+    let c_incl_args = build::CInclArgs::try_from(&pio_scons_vars)?;
+
+    cfg_args.propagate();
+    cfg_args.output();
+
+    if let Some(env_path) = link_args.as_ref().map(|_| pio_scons_vars.path.clone()) {
+        cargo::set_metadata("EMBUILD_ENV_PATH", env_path);
+    }
+
+    let esp_idf = PathBuf::from(&pio_scons_vars.pio_framework_dir);
+    cargo::set_metadata("EMBUILD_ESP_IDF_PATH", esp_idf.try_to_str()?);
+
+    c_incl_args.propagate();
+
+    if let Some(link_args) = link_args {
+        link_args.propagate();
+        link_args.output();
+    }
 
     Ok(())
 }
